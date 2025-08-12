@@ -1,12 +1,10 @@
 import streamlit as st
-from huggingface_hub import login
+from sentence_transformers import SentenceTransformer
 import pandas as pd
 import re
 from dotenv import load_dotenv
 import os
-from datasets import load_dataset
 from langchain_community.vectorstores.pgvector import PGVector
-from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
@@ -22,9 +20,7 @@ random.seed(42)
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 
 load_dotenv()
-hf_token = os.getenv("HF_TOKEN")
 groq_api_key = os.getenv("GROQ_API_KEY")
-login(hf_token)
 
 def clean_text(text):
     if pd.isnull(text):
@@ -56,20 +52,8 @@ def check_collection_exists(connection_string, collection_name):
 
 @st.cache_resource
 def load_vector_store():
-    ds = load_dataset("MakTek/Customer_support_faqs_dataset")
-    df = ds['train'].to_pandas()
-    
-    for col in ['question', 'answer']:
-        df[col] = df[col].apply(clean_text)
-    
-    docs = [
-        {"content": f"Q: {q}\nA: {a}"}
-        for q, a in zip(df['question'], df['answer'])
-    ]
-    
-    docs = [Document(page_content=d['content']) for d in docs]
-    
-    embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
+    # Gunakan BAAI/bge-base-en-v1.5 secara lokal
+    embeddings = SentenceTransformer('BAAI/bge-base-en-v1.5')  # Pastikan model ini sudah diunduh
     
     connection_string = os.getenv(
         "POSTGRES_URL_NON_POOLING"
@@ -78,16 +62,18 @@ def load_vector_store():
     try:
         vectorstore = PGVector(
             connection_string=connection_string,
-            embedding_function=embeddings,
+            embedding_function=embeddings.encode,
             collection_name="documents",
-            distance_strategy="cosine"  # Menentukan strategi jarak untuk retriever
+            distance_strategy="cosine"
         )
         
-        if not check_collection_exists(connection_string, "documents"):
-            vectorstore.add_documents(docs)
-        
-        return vectorstore
-    except AttributeError as e:
+        # Periksa apakah koleksi ada, jika ya, gunakan saja tanpa menambah dokumen
+        if check_collection_exists(connection_string, "documents"):
+            return vectorstore
+        else:
+            st.error("Collection 'documents' not found in Supabase. Please ensure it has been embedded previously.")
+            return None
+    except Exception as e:
         st.error(f"Error initializing PGVector: {str(e)}")
         return None
 
@@ -101,7 +87,7 @@ def setup_qa_chain(_vectorstore):
         groq_api_key=groq_api_key,
         model_name="llama3-8b-8192",
         temperature=0,
-        model_kwargs={"seed": 42}  # Menambahkan seed untuk konsistensi
+        model_kwargs={"seed": 42}
     )
     
     prompt = PromptTemplate(
@@ -122,7 +108,7 @@ ASSISTANT RESPONSE:""",
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
-        retriever=_vectorstore.as_retriever(search_kwargs={"k": 3}),  # Mengambil 3 dokumen paling relevan
+        retriever=_vectorstore.as_retriever(search_kwargs={"k": 3}),
         return_source_documents=True,
         chain_type_kwargs={"prompt": prompt}
     )
@@ -155,7 +141,6 @@ if "messages" not in st.session_state:
 
 # Simpan riwayat ke file untuk menjaga konsistensi antar sesi
 if os.path.exists("session_history.json"):
-    import json
     with open("session_history.json", "r") as f:
         st.session_state.conversation_history = json.load(f)
     st.session_state.messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": msg} 
@@ -184,8 +169,5 @@ if prompt := st.chat_input("Ask your question here..."):
                 st.markdown(answer)
             
             st.session_state.conversation_history.append({"question": prompt, "answer": answer})
-            # Simpan riwayat ke file
             with open("session_history.json", "w") as f:
                 json.dump(st.session_state.conversation_history, f)
-
-
