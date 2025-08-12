@@ -1,4 +1,5 @@
 Customer Support Chatbot
+Link deployment: https://chatbotcustsupport.streamlit.app/
 
 Description
 The Customer Support Chatbot is a Streamlit-based application that uses Retrieval-Augmented Generation (RAG) to answer customer queries based on a FAQ dataset. It leverages a PostgreSQL database with the pgvector extension for storing text embeddings, Hugging Face for embedding generation, and Groq as the language model for generating responses. The dataset used is MakTek/Customer_support_faqs_dataset from Hugging Face.
