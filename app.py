@@ -93,7 +93,8 @@ def setup_qa_chain(_vectorstore):
     
     llm = ChatGroq(
         groq_api_key=groq_api_key,
-        model_name="llama3-8b-8192"
+        model_name="llama3-8b-8192",
+        temperature=0
     )
     
     prompt = PromptTemplate(
@@ -170,5 +171,6 @@ if prompt := st.chat_input("Ask your question here..."):
                 st.markdown(answer)
             
             st.session_state.conversation_history.append({"question": prompt, "answer": answer})
+
 
 
