@@ -14,6 +14,7 @@ from langchain.prompts import PromptTemplate
 import sqlalchemy
 import logging
 import random
+import json
 
 # Set seed for reproducibility
 random.seed(42)
@@ -186,4 +187,5 @@ if prompt := st.chat_input("Ask your question here..."):
             # Simpan riwayat ke file
             with open("session_history.json", "w") as f:
                 json.dump(st.session_state.conversation_history, f)
+
 
