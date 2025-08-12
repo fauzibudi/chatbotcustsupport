@@ -71,8 +71,7 @@ def load_vector_store():
     embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     
     connection_string = os.getenv(
-        "POSTGRES_URL_NON_POOLING",
-        "postgresql+psycopg2://postgres.kuzwbhqbxmibamfckabl:umgCXtTHVEXYDHUu@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require"
+        "POSTGRES_URL_NON_POOLING"
     )
     
     try:
@@ -187,3 +186,4 @@ if prompt := st.chat_input("Ask your question here..."):
             # Simpan riwayat ke file
             with open("session_history.json", "w") as f:
                 json.dump(st.session_state.conversation_history, f)
+
