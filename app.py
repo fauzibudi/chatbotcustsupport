@@ -11,13 +11,16 @@ from langchain.schema import Document
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
+import sqlalchemy
+import logging
+
+# Suppress PyTorch warning
+logging.getLogger("streamlit").setLevel(logging.ERROR)
 
 # Load environment variables
 load_dotenv()
 hf_token = os.getenv("HF_TOKEN")
 groq_api_key = os.getenv("GROQ_API_KEY")
-
-# Login to Hugging Face
 login(hf_token)
 
 # Function to clean text
@@ -25,6 +28,31 @@ def clean_text(text):
     if pd.isnull(text):
         return ""
     return re.sub(r"[\r\n\t\xa0]+", " ", str(text)).strip()
+
+# Check if collection exists in PostgreSQL
+def check_collection_exists(connection_string, collection_name):
+    try:
+        engine = sqlalchemy.create_engine(connection_string)
+        with engine.connect() as conn:
+            result = conn.execute(
+                sqlalchemy.text(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = :table_name)"
+                ),
+                {"table_name": f"langchain_pg_collection"}
+            ).scalar()
+            if result:
+                # Check if the collection_name exists in langchain_pg_collection
+                result = conn.execute(
+                    sqlalchemy.text(
+                        "SELECT 1 FROM langchain_pg_collection WHERE name = :name LIMIT 1"
+                    ),
+                    {"name": collection_name}
+                ).scalar()
+                return result is not None
+            return False
+    except Exception as e:
+        st.error(f"Error checking collection: {str(e)}")
+        return False
 
 # Load and process dataset
 @st.cache_resource
@@ -44,27 +72,35 @@ def load_vector_store():
     
     embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     
-    # Gunakan connection string dengan skema postgresql+psycopg2
+    # Use Supabase non-pooling connection string
     connection_string = os.getenv(
         "POSTGRES_URL_NON_POOLING",
         "postgresql+psycopg2://postgres.kuzwbhqbxmibamfckabl:umgCXtTHVEXYDHUu@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require"
     )
     
-    vectorstore = PGVector(
-        connection_string=connection_string,
-        embedding_function=embeddings,
-        collection_name="documents"
-    )
-    
-    # Cek apakah koleksi sudah ada untuk mencegah duplikasi
-    if not vectorstore.collection_exists(collection_name="documents"):
-        vectorstore.add_documents(docs)
-    
-    return vectorstore
+    try:
+        vectorstore = PGVector(
+            connection_string=connection_string,
+            embedding_function=embeddings,
+            collection_name="documents"
+        )
+        
+        # Check if collection exists to avoid duplicate document insertion
+        if not check_collection_exists(connection_string, "documents"):
+            vectorstore.add_documents(docs)
+        
+        return vectorstore
+    except AttributeError as e:
+        st.error(f"Error initializing PGVector: {str(e)}")
+        return None
 
 # Setup LLM and QA chain
 @st.cache_resource
 def setup_qa_chain(_vectorstore):
+    if _vectorstore is None:
+        st.error("Vector store initialization failed.")
+        return None
+    
     llm = ChatGroq(
         groq_api_key=groq_api_key,
         model_name="llama3-8b-8192"
@@ -142,15 +178,16 @@ if prompt := st.chat_input("Ask your question here..."):
     
     # Run QA chain
     with st.spinner("Thinking..."):
-        result = qa_chain.invoke({"query": prompt_with_history})
-        answer = result["result"]
-    
-    # Add assistant message to chat
-    st.session_state.messages.append({"role": "assistant", "content": answer})
-    with st.chat_message("assistant"):
-        st.markdown(answer)
-    
-    # Update conversation history
-
-    st.session_state.conversation_history.append({"question": prompt, "answer": answer})
-
+        if qa_chain is None:
+            st.error("QA chain is not initialized. Please check the vector store setup.")
+        else:
+            result = qa_chain.invoke({"query": prompt_with_history})
+            answer = result["result"]
+        
+            # Add assistant message to chat
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+            with st.chat_message("assistant"):
+                st.markdown(answer)
+            
+            # Update conversation history
+            st.session_state.conversation_history.append({"question": prompt, "answer": answer})
