@@ -22,6 +22,17 @@ logging.getLogger("streamlit").setLevel(logging.ERROR)
 load_dotenv()
 groq_api_key = os.getenv("GROQ_API_KEY")
 
+# Kelas kustom untuk kompatibilitas dengan LangChain
+class CustomEmbeddings:
+    def __init__(self, model):
+        self.model = model
+    
+    def embed_query(self, text):
+        return self.model.encode([text])[0]  # Mengembalikan vektor untuk teks tunggal
+    
+    def embed_documents(self, texts):
+        return self.model.encode(texts)  # Mengembalikan daftar vektor untuk beberapa teks
+
 def clean_text(text):
     if pd.isnull(text):
         return ""
@@ -53,7 +64,8 @@ def check_collection_exists(connection_string, collection_name):
 @st.cache_resource
 def load_vector_store():
     # Gunakan BAAI/bge-base-en-v1.5 secara lokal
-    embeddings = SentenceTransformer('BAAI/bge-base-en-v1.5')  # Pastikan model ini sudah diunduh
+    model = SentenceTransformer('BAAI/bge-base-en-v1.5')  # Pastikan model ini sudah diunduh
+    embeddings = CustomEmbeddings(model)  # Bungkus dengan kelas kustom
     
     connection_string = os.getenv(
         "POSTGRES_URL_NON_POOLING"
@@ -62,7 +74,7 @@ def load_vector_store():
     try:
         vectorstore = PGVector(
             connection_string=connection_string,
-            embedding_function=embeddings.encode,
+            embedding_function=embeddings,
             collection_name="documents",
             distance_strategy="cosine"
         )
