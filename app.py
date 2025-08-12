@@ -44,7 +44,8 @@ def load_vector_store():
     
     embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     
-    connection_string = "postgresql+psycopg2://postgres:admin@localhost:5433/postgres"
+    # Gunakan connection string non-pooling dari Supabase
+    connection_string = os.getenv("POSTGRES_URL_NON_POOLING", "postgres://postgres.kuzwbhqbxmibamfckabl:umgCXtTHVEXYDHUu@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require")
     
     vectorstore = PGVector(
         connection_string=connection_string,
@@ -52,8 +53,9 @@ def load_vector_store():
         collection_name="documents"
     )
     
-    # Add documents (this might add duplicates if run multiple times; in production, handle with IDs or check existence)
-    vectorstore.add_documents(docs)
+    # Cek apakah koleksi sudah ada untuk mencegah duplikasi
+    if not vectorstore.collection_exists(collection_name="documents"):
+        vectorstore.add_documents(docs)
     
     return vectorstore
 
@@ -146,4 +148,5 @@ if prompt := st.chat_input("Ask your question here..."):
         st.markdown(answer)
     
     # Update conversation history
+
     st.session_state.conversation_history.append({"question": prompt, "answer": answer})
