@@ -1,10 +1,12 @@
 import streamlit as st
-from sentence_transformers import SentenceTransformer
+from huggingface_hub import login
 import pandas as pd
 import re
 from dotenv import load_dotenv
 import os
+from datasets import load_dataset
 from langchain_community.vectorstores.pgvector import PGVector
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
@@ -12,26 +14,14 @@ from langchain.prompts import PromptTemplate
 import sqlalchemy
 import logging
 import random
-import json
 
-# Set seed for reproducibility
 random.seed(42)
-
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 
 load_dotenv()
+hf_token = os.getenv("HF_TOKEN")
 groq_api_key = os.getenv("GROQ_API_KEY")
-
-# Kelas kustom untuk kompatibilitas dengan LangChain
-class CustomEmbeddings:
-    def __init__(self, model):
-        self.model = model
-    
-    def embed_query(self, text):
-        return self.model.encode([text])[0]  # Mengembalikan vektor untuk teks tunggal
-    
-    def embed_documents(self, texts):
-        return self.model.encode(texts)  # Mengembalikan daftar vektor untuk beberapa teks
+login(hf_token)
 
 def clean_text(text):
     if pd.isnull(text):
@@ -63,29 +53,38 @@ def check_collection_exists(connection_string, collection_name):
 
 @st.cache_resource
 def load_vector_store():
-    # Gunakan BAAI/bge-base-en-v1.5 secara lokal
-    model = SentenceTransformer('BAAI/bge-base-en-v1.5')  # Pastikan model ini sudah diunduh
-    embeddings = CustomEmbeddings(model)  # Bungkus dengan kelas kustom
+    ds = load_dataset("MakTek/Customer_support_faqs_dataset")
+    df = ds['train'].to_pandas()
+    
+    for col in ['question', 'answer']:
+        df[col] = df[col].apply(clean_text)
+    
+    docs = [
+        {"content": f"Q: {q}\nA: {a}"}
+        for q, a in zip(df['question'], df['answer'])
+    ]
+    
+    docs = [Document(page_content=d['content']) for d in docs]
+    
+    embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     
     connection_string = os.getenv(
-        "POSTGRES_URL_NON_POOLING"
+        "POSTGRES_URL_NON_POOLING",
+        "postgresql+psycopg2://postgres.kuzwbhqbxmibamfckabl:umgCXtTHVEXYDHUu@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require"
     )
     
     try:
         vectorstore = PGVector(
             connection_string=connection_string,
             embedding_function=embeddings,
-            collection_name="documents",
-            distance_strategy="cosine"
+            collection_name="documents"
         )
         
-        # Periksa apakah koleksi ada, jika ya, gunakan saja tanpa menambah dokumen
-        if check_collection_exists(connection_string, "documents"):
-            return vectorstore
-        else:
-            st.error("Collection 'documents' not found in Supabase. Please ensure it has been embedded previously.")
-            return None
-    except Exception as e:
+        if not check_collection_exists(connection_string, "documents"):
+            vectorstore.add_documents(docs)
+        
+        return vectorstore
+    except AttributeError as e:
         st.error(f"Error initializing PGVector: {str(e)}")
         return None
 
@@ -103,10 +102,11 @@ def setup_qa_chain(_vectorstore):
     )
     
     prompt = PromptTemplate(
-        template="""You are a helpful customer service assistant. You MUST use only the information provided in the following CONTEXT to answer the customer's question accurately. Do NOT add information that is not present in the CONTEXT.
+        template="""You are a helpful customer service assistant. Use the following CONTEXT to answer the customer's question accurately.
 
-If the context contains relevant information, provide a concise and accurate answer based on it.
-If the context does not contain relevant information or you are unsure, respond with: 'I'm sorry, I don't have enough information to answer your question.'
+If the context contains relevant information, provide a comprehensive and helpful answer.
+
+If you're not sure or the information isn't available, say so honestly.
 
 CONTEXT:
 {context}
@@ -120,7 +120,7 @@ ASSISTANT RESPONSE:""",
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
-        retriever=_vectorstore.as_retriever(search_kwargs={"k": 3}),
+        retriever=_vectorstore.as_retriever(),
         return_source_documents=True,
         chain_type_kwargs={"prompt": prompt}
     )
@@ -129,10 +129,11 @@ ASSISTANT RESPONSE:""",
 
 def create_prompt_with_history(history, current_question):
     history_text = "\n".join([f"Q: {entry['question']}\nA: {entry['answer']}" for entry in history])
-    return f"""You are a helpful customer service assistant. You MUST use only the information provided in the following CONTEXT to answer the customer's question accurately. Do NOT add information that is not present in the CONTEXT.
+    return f"""You are a helpful customer service assistant. Use the following CONTEXT to answer the customer's question accurately.
 
-If the context contains relevant information, provide a concise and accurate answer based on it.
-If the context does not contain relevant information or you are unsure, respond with: 'I'm sorry, I don't have enough information to answer your question.'
+If the context contains relevant information, provide a comprehensive and helpful answer.
+
+If you're not sure or the information isn't available, say so honestly.
 
 CONTEXT:
 {history_text}
@@ -150,13 +151,6 @@ if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 if "messages" not in st.session_state:
     st.session_state.messages = []
-
-# Simpan riwayat ke file untuk menjaga konsistensi antar sesi
-if os.path.exists("session_history.json"):
-    with open("session_history.json", "r") as f:
-        st.session_state.conversation_history = json.load(f)
-    st.session_state.messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": msg} 
-                                for i, msg in enumerate(sum([[h['question'], h['answer']] for h in st.session_state.conversation_history], []))]
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -181,5 +175,3 @@ if prompt := st.chat_input("Ask your question here..."):
                 st.markdown(answer)
             
             st.session_state.conversation_history.append({"question": prompt, "answer": answer})
-            with open("session_history.json", "w") as f:
-                json.dump(st.session_state.conversation_history, f)
