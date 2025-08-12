@@ -14,22 +14,18 @@ from langchain.prompts import PromptTemplate
 import sqlalchemy
 import logging
 
-# Suppress PyTorch warning
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 
-# Load environment variables
 load_dotenv()
 hf_token = os.getenv("HF_TOKEN")
 groq_api_key = os.getenv("GROQ_API_KEY")
 login(hf_token)
 
-# Function to clean text
 def clean_text(text):
     if pd.isnull(text):
         return ""
     return re.sub(r"[\r\n\t\xa0]+", " ", str(text)).strip()
 
-# Check if collection exists in PostgreSQL
 def check_collection_exists(connection_string, collection_name):
     try:
         engine = sqlalchemy.create_engine(connection_string)
@@ -41,7 +37,6 @@ def check_collection_exists(connection_string, collection_name):
                 {"table_name": f"langchain_pg_collection"}
             ).scalar()
             if result:
-                # Check if the collection_name exists in langchain_pg_collection
                 result = conn.execute(
                     sqlalchemy.text(
                         "SELECT 1 FROM langchain_pg_collection WHERE name = :name LIMIT 1"
@@ -54,7 +49,6 @@ def check_collection_exists(connection_string, collection_name):
         st.error(f"Error checking collection: {str(e)}")
         return False
 
-# Load and process dataset
 @st.cache_resource
 def load_vector_store():
     ds = load_dataset("MakTek/Customer_support_faqs_dataset")
@@ -72,7 +66,6 @@ def load_vector_store():
     
     embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     
-    # Use Supabase non-pooling connection string
     connection_string = os.getenv(
         "POSTGRES_URL_NON_POOLING",
         "postgresql+psycopg2://postgres.kuzwbhqbxmibamfckabl:umgCXtTHVEXYDHUu@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require"
@@ -85,7 +78,6 @@ def load_vector_store():
             collection_name="documents"
         )
         
-        # Check if collection exists to avoid duplicate document insertion
         if not check_collection_exists(connection_string, "documents"):
             vectorstore.add_documents(docs)
         
@@ -94,7 +86,6 @@ def load_vector_store():
         st.error(f"Error initializing PGVector: {str(e)}")
         return None
 
-# Setup LLM and QA chain
 @st.cache_resource
 def setup_qa_chain(_vectorstore):
     if _vectorstore is None:
@@ -132,7 +123,6 @@ ASSISTANT RESPONSE:""",
     
     return qa_chain
 
-# Create prompt with history
 def create_prompt_with_history(history, current_question):
     history_text = "\n".join([f"Q: {entry['question']}\nA: {entry['answer']}" for entry in history])
     return f"""You are a helpful customer service assistant. Use the following CONTEXT to answer the customer's question accurately.
@@ -148,35 +138,27 @@ CUSTOMER QUESTION: {current_question}
 
 ASSISTANT RESPONSE:"""
 
-# Streamlit app
 st.title("Customer Support Chatbot")
 
-# Load vector store and QA chain
 vectorstore = load_vector_store()
 qa_chain = setup_qa_chain(vectorstore)
 
-# Initialize chat history in session state
 if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Chat input
 if prompt := st.chat_input("Ask your question here..."):
-    # Add user message to chat
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     
-    # Generate prompt with history
     prompt_with_history = create_prompt_with_history(st.session_state.conversation_history, prompt)
     
-    # Run QA chain
     with st.spinner("Thinking..."):
         if qa_chain is None:
             st.error("QA chain is not initialized. Please check the vector store setup.")
@@ -184,10 +166,9 @@ if prompt := st.chat_input("Ask your question here..."):
             result = qa_chain.invoke({"query": prompt_with_history})
             answer = result["result"]
         
-            # Add assistant message to chat
             st.session_state.messages.append({"role": "assistant", "content": answer})
             with st.chat_message("assistant"):
                 st.markdown(answer)
             
-            # Update conversation history
             st.session_state.conversation_history.append({"question": prompt, "answer": answer})
+
