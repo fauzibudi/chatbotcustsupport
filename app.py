@@ -13,6 +13,10 @@ from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 import sqlalchemy
 import logging
+import random
+
+# Set seed for reproducibility
+random.seed(42)
 
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 
@@ -67,14 +71,16 @@ def load_vector_store():
     embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-base-en-v1.5")
     
     connection_string = os.getenv(
-        "POSTGRES_URL_NON_POOLING"
+        "POSTGRES_URL_NON_POOLING",
+        "postgresql+psycopg2://postgres.kuzwbhqbxmibamfckabl:umgCXtTHVEXYDHUu@aws-0-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require"
     )
     
     try:
         vectorstore = PGVector(
             connection_string=connection_string,
             embedding_function=embeddings,
-            collection_name="documents"
+            collection_name="documents",
+            distance_strategy="cosine"  # Menentukan strategi jarak untuk retriever
         )
         
         if not check_collection_exists(connection_string, "documents"):
@@ -94,15 +100,15 @@ def setup_qa_chain(_vectorstore):
     llm = ChatGroq(
         groq_api_key=groq_api_key,
         model_name="llama3-8b-8192",
-        temperature=0
+        temperature=0,
+        model_kwargs={"seed": 42}  # Menambahkan seed untuk konsistensi
     )
     
     prompt = PromptTemplate(
-        template="""You are a helpful customer service assistant. Use the following CONTEXT to answer the customer's question accurately.
+        template="""You are a helpful customer service assistant. You MUST use only the information provided in the following CONTEXT to answer the customer's question accurately. Do NOT add information that is not present in the CONTEXT.
 
-If the context contains relevant information, provide a comprehensive and helpful answer.
-
-If you're not sure or the information isn't available, say so honestly.
+If the context contains relevant information, provide a concise and accurate answer based on it.
+If the context does not contain relevant information or you are unsure, respond with: 'I'm sorry, I don't have enough information to answer your question.'
 
 CONTEXT:
 {context}
@@ -116,7 +122,7 @@ ASSISTANT RESPONSE:""",
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
-        retriever=_vectorstore.as_retriever(),
+        retriever=_vectorstore.as_retriever(search_kwargs={"k": 3}),  # Mengambil 3 dokumen paling relevan
         return_source_documents=True,
         chain_type_kwargs={"prompt": prompt}
     )
@@ -125,11 +131,10 @@ ASSISTANT RESPONSE:""",
 
 def create_prompt_with_history(history, current_question):
     history_text = "\n".join([f"Q: {entry['question']}\nA: {entry['answer']}" for entry in history])
-    return f"""You are a helpful customer service assistant. Use the following CONTEXT to answer the customer's question accurately.
+    return f"""You are a helpful customer service assistant. You MUST use only the information provided in the following CONTEXT to answer the customer's question accurately. Do NOT add information that is not present in the CONTEXT.
 
-If the context contains relevant information, provide a comprehensive and helpful answer.
-
-If you're not sure or the information isn't available, say so honestly.
+If the context contains relevant information, provide a concise and accurate answer based on it.
+If the context does not contain relevant information or you are unsure, respond with: 'I'm sorry, I don't have enough information to answer your question.'
 
 CONTEXT:
 {history_text}
@@ -147,6 +152,14 @@ if "conversation_history" not in st.session_state:
     st.session_state.conversation_history = []
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+# Simpan riwayat ke file untuk menjaga konsistensi antar sesi
+if os.path.exists("session_history.json"):
+    import json
+    with open("session_history.json", "r") as f:
+        st.session_state.conversation_history = json.load(f)
+    st.session_state.messages = [{"role": "user" if i % 2 == 0 else "assistant", "content": msg} 
+                                for i, msg in enumerate(sum([[h['question'], h['answer']] for h in st.session_state.conversation_history], []))]
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -171,6 +184,6 @@ if prompt := st.chat_input("Ask your question here..."):
                 st.markdown(answer)
             
             st.session_state.conversation_history.append({"question": prompt, "answer": answer})
-
-
-
+            # Simpan riwayat ke file
+            with open("session_history.json", "w") as f:
+                json.dump(st.session_state.conversation_history, f)
